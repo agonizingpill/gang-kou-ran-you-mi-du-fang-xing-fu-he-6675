@@ -37,6 +37,9 @@ def request_transfer(s,x,d,u):
     tr=Transfer(**d.model_dump(),status='requested',grade_snapshot=t.grade,density_snapshot=density,viscosity_snapshot=x.viscosity,sulfur_snapshot=x.sulfur,released_by='');s.add(tr);s.flush();audit(s,u,'transfer_requested',tr.code);return transfer_view(s,tr)
 def release(s,tr,u):
     if tr.status!='requested':raise HTTPException(409,'调拨单已放行，不能重复扣减')
+    from .drift_service import grade_gate
+    gate=grade_gate(s,tr.grade_snapshot,lock=True)
+    if gate.state=='alerted':raise HTTPException(409,'该燃油等级存在未解除的滚动漂移告警，主管查明原因并解除前暂停新调拨放行；已放行依据保留')
     x=get(s,FuelSample,tr.sample_id);t=get(s,Tank,x.tank_id,True)
     if t.status!='active':raise HTTPException(409,'储罐暂停中，不能放行')
     if not within_spec(tr.grade_snapshot,tr.density_snapshot,tr.viscosity_snapshot,tr.sulfur_snapshot):raise HTTPException(409,'调拨化验快照不满足等级规格')

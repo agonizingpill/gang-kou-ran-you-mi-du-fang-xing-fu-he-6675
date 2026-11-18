@@ -7,6 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from redis import Redis
 from .database import Base,engine,Session
 from .models import User,Tank,FuelSample,Transfer,Audit
+from .drift_models import GradeDrift,DriftWindow,DriftWindowSample,DriftAlert
 from .schemas import Login,TankIn,TankState,SampleIn,RetestIn,TransferIn
 from .security import current,allow,password_hash,token_for
 from .transfer_service import obj,get,audit,sample_view,transfer_view,retest,request_transfer,release
@@ -27,6 +28,8 @@ from .receipt_routes import router as receipt_router
 app.include_router(receipt_router)
 from .harbor_routes import router as harbor_router
 app.include_router(harbor_router)
+from .drift_routes import router as drift_router
+app.include_router(drift_router)
 @app.exception_handler(IntegrityError)
 async def duplicate(request,e):return JSONResponse({'detail':'编号已存在或关联记录不合法'},status_code=409)
 @app.get('/health')

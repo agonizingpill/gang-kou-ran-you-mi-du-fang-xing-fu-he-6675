@@ -57,9 +57,10 @@ seed42生成120条固定参考样，VLSFO/MGO各60；它们有独立等级与密
 
 `backend/src/models.py`为Tank/FuelSample/Transfer；`schemas.py`请求范围；`density_model.py`按级KDE与规格函数；`transfer_service.py`资格/复检/化验快照与锁罐放行；`worker.py`队列/心跳；`main.py`路由；`middlewares.py`两个中间件。`backend/scripts/seed_demo.py`按自然键只补缺失记录，不覆盖修改。
 
+`backend/src/drift_models.py`新增GradeDrift/DriftWindow/DriftWindowSample/DriftAlert四张表，`drift_service.py`按等级滚动评估并由`transfer_service.release`在锁闸门后拦截，原表列不变；
 `backend/src/receipt_models.py`新增TankCapacity/TankReceipt/LoadingReconciliation三张关联表，原表列不变；`receipt_schemas.py`校验罐基准、收油测值和表计输入；`receipt_service.py`锁罐入量、加权密度、调查结案；`receipt_routes.py`提供`/tank-capacities`、`/tank-receipts`及`/loading-reconciliations`。create_all非破坏性建表，旧数据无需改列迁移。
 
-前端`pages/tanks.js`、`samples.js`、`evidence.js`、`transfers.js`分别处理罐、收样、分布复检、调拨；新增`receipts.js`收油计划/罐容基准/核对入罐，`reconciliations.js`船岸表计与调查结案。`components/logbook.js`共享shell/heading/sampleTag/tankTag/notice；样品状态标签在收样和复检复用；`utils/api.js`会话/API/store，`utils/format.js`数字/转义/上海时间。角色、油样状态、收油状态、对账状态在`backend/src/constants.py`与`frontend/src/constants.js`定义；等级规格在backend constants及GET /grades供页面复用；角色和状态实际使用处为security.py/main.py/worker.py/transfer_service.py以及前端页面。
+前端`pages/tanks.js`、`samples.js`、`evidence.js`、`transfers.js`分别处理罐、收样、分布复检、调拨；`pages/drift.js`展示等级漂移窗口、偏移依据和处置审计；新增`receipts.js`收油计划/罐容基准/核对入罐，`reconciliations.js`船岸表计与调查结案。`components/logbook.js`共享shell/heading/sampleTag/tankTag/notice；样品状态标签在收样和复检复用；`utils/api.js`会话/API/store，`utils/format.js`数字/转义/上海时间。角色、油样状态、收油状态、对账状态在`backend/src/constants.py`与`frontend/src/constants.js`定义；等级规格在backend constants及GET /grades供页面复用；角色和状态实际使用处为security.py/main.py/worker.py/transfer_service.py以及前端页面。
 
 五服务frontend/backend/worker/db/redis有独立健康检查；backend/worker依赖db/redis healthy，前端等待backend。命名卷db-data/redis-data/artifacts；worker共享卷保存模型证据和心跳。Nginx /api/剥前缀代理，后端路由无/api双重前缀。`.env.example`提供COMPOSE_PROJECT_NAME、三端口、JWT_SECRET、DOCKER_SUBNET；内部DATABASE_URL/REDIS_URL/SEED_DEMO在Compose设置。由于宿主默认地址池耗尽，显式10.221.29.0/24，可通过DOCKER_SUBNET改为无冲突网段。
 
@@ -80,6 +81,16 @@ License: MIT.
 
 正式调拨放行必须同时满足两项新前置。历史已released记录保持原状；旧requested单须补许可和窗口。主管在管线页填写至少8字完工依据可释放管线与泊位一次；船岸计量对账结案也自动完成同一资源释放，重复不再动库存。已完成窗口仍保留在重叠历史中。
 
-新增后端harbor_models/schemas/service/routes.py及前端pages/lines.js、windows.js、retention.js，6张关联表由create_all补建，原表无新增列。seed只按自然键补两条输油管线和两座泊位，双跑不覆盖在用状态、许可、预约或检验记录。登录后导航共9页，前端仍为原生HTML/CSS/JS。
+新增后端harbor_models/schemas/service/routes.py及前端pages/lines.js、windows.js、retention.js，6张关联表由create_all补建，原表无新增列。seed只按自然键补两条输油管线和两座泊位，双跑不覆盖在用状态、许可、预约或检验记录。登录后导航共9页，前端仍为原生HTML/CSS/JS。V4新增第10页「等级漂移监测」。
 
 V3范围：清线量与完工依据来自人工记录，不控制泵阀；时间按用户北京时间输入、后端保存UTC，页面标注UTC；额定流量只做窗口容量检查，未模拟泵速/温度补偿/实时船位。泊位当前无取消/改期功能，计划错误须新调拨，已完成历史区间保持占位证据。留样无温控传感器、封条照片、物流或检测报告附件；委托密度是人工外部报告，不重新训练KDE，不判定法律责任。详细真实证据见test-artifacts/gb-1029/v3。
+
+## V4 按等级滚动漂移监测
+
+- 单一油样合格不能证明整批来样没有偏移。GradeDrift每个燃油等级一条闸门行；DriftWindow为滚动窗口（最近12条已审业务样）；DriftWindowSample是永久纳入台账（sample_id唯一），记录active/slid/cleared，重试或滚窗都不会重复纳入同一样。DriftAlert保存告警依据与主管解除记录。
+- 基准固定取同等级reference=True样（≥20条），用中位数与1.4826×MAD的稳健σ；业务样不进入参考集。窗口取最近12条已审业务样，并按罐限流（每罐最多保留6条、至少2条才计权），再按来源罐均衡计权：每个来源罐总权重相同，单罐密集取样既挤不掉其它罐、也不能主导判定。偏移判定需≥4 kg/m³且≥2.5倍标准误；少于6条已审样、少于2个罐或任一罐不足2条时一律pending（证据不足待观察），永不告警。仅有qualified与已签注retested样入窗，异常未复检样不进入；复检样以签注密度入窗，窗口内样品的后续复检签注会同步更新其纳入密度（slid/cleared行与已关闭窗口保持原审计值）。
+- 告警后该等级新调拨放行被暂停（放行事务首先锁GradeDrift，与判定同一顺序，故告警与放行并发时由先取得行锁者决定是否扣量与占线）；已放行调拨的化验快照、许可与窗口依据全部保留，不回滚、不改写。调拨申请本身仍可登记，仅放行被拦截。
+- 主管填写≥8字解除依据后解除：当前窗口标为closed，窗口内已审样统一置cleared台账终态，写入watermark；解除时刻已审但尚未入窗的样本也一并停用，故这些样不再触发同一告警。重复解除返回409、不会重开旧告警。解除后新样进入新窗口继续监测并可再次告警。
+- worker每5秒扫描一次未入窗的已审样并评估；纳入台账在独立事务中提交，进程中断后可从尚未入窗的样本恢复，已入窗样本不重复计数。前端第10页「等级漂移监测」显示窗口样本、参考中位数/σ、均衡计权、偏移/z/门限、受影响罐、告警依据与处置审计；调拨页在告警时显示暂停提示。原有单样KDE比对与复检流程不变。
+
+V4范围：漂移是对固定参考同等级密度相似性的统计观察，不是产品合格概率或法律结论；权重与门限为演示参数，需按真实油源与取样频次标定。窗口按条数滚动（非时间窗），未按到港批次/供应商分层；混油或温度修正仍靠人工说明。仅监测15℃密度单指标，黏度/硫仍由原样规格把关。种子只补两条GradeDrift闸门行，不改任何既有样本、窗口或告警。
